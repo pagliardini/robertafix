@@ -1,0 +1,4 @@
+flask
+tkinter
+lxml
+zipfile36
