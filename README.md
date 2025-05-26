@@ -1,14 +1,16 @@
-# roberta-fix
+# RobertaFix
+
+Herramienta para modificar rutas en proyectos de Adobe Premiere Pro.
+
+## Características
+- Reemplaza rutas de red en archivos .prproj
+- Crea copias de seguridad automáticamente
+- Interfaz gráfica fácil de usar
+
+© 2025 Pagliardini. Todos los derechos reservados.
 
 ## Descripción general
 Este proyecto proporciona una herramienta para el procesamiento por lotes de archivos de proyecto de Adobe Premiere Pro (.prproj), permitiendo a los usuarios extraer, editar y volver a empaquetar el contenido XML dentro de estos archivos.
-
-## Características
-- Crear copias de archivos .prproj
-- Cambiar la extensión de archivo a .zip para su extracción
-- Extraer el contenido XML para su edición
-- Reemplazar texto dentro de los archivos XML mediante una interfaz gráfica de usuario (GUI)
-- Recomprimir los archivos editados de nuevo al formato .prproj
 
 ## Instalación
 1. Clona el repositorio:

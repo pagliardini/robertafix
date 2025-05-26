@@ -3,6 +3,8 @@ import zipfile
 import shutil
 import sys
 from tkinter import Tk, filedialog, messagebox, Label, Entry, Button, Frame, StringVar, Text, Scrollbar
+import subprocess
+import json
 
 # Variable global para el widget de log
 log_text = None
@@ -48,34 +50,32 @@ def process_project(path, output_dir, old_text, new_text):
     replacements_count = 0
     log(f"🔍 Buscando '{old_text}' para reemplazar con '{new_text}'...")
     
+    text_extensions = (".xml", ".xmp", ".prtl", ".prproj", ".txt", ".mlt", ".json", ".js", ".css", ".html")
+    
     for root, _, files in os.walk(extract_dir):
         for file in files:
-            # Procesar todos los archivos o usar una lista más amplia de extensiones
+            file_ext = os.path.splitext(file)[1].lower()
             xml_path = os.path.join(root, file)
+            
+            log(f"🔍 Examinando: {file}")
+            
             try:
-                # Primero intentar leer como binario para detectar BOM
+                # Detección binaria
+                is_binary = False
                 with open(xml_path, "rb") as f:
-                    binary_content = f.read()
-                
-                # Ver primeros bytes para debug
-                log(f"📄 Analizando archivo: {file} - Primeros bytes: {binary_content[:20]}")
-                
-                # Detectar si parece texto o binario
-                is_text = True
-                try:
-                    binary_content.decode('utf-8')
-                except UnicodeDecodeError:
-                    try:
-                        binary_content.decode('latin1')
-                    except UnicodeDecodeError:
-                        is_text = False
-                
-                if not is_text and not file.endswith((".xml", ".proj", ".xmp", ".txt")):
+                    chunk = f.read(1024)
+                    if b'\x00' in chunk or sum(1 for b in chunk if b < 32 and b not in (9, 10, 13)) > len(chunk) * 0.3:
+                        is_binary = True
+                        
+                if is_binary and not file.lower().endswith(text_extensions):
                     log(f"⏭️ Omitiendo archivo binario: {file}")
                     continue
                 
-                # Convertir a texto con varias codificaciones
-                encodings = ['utf-8-sig', 'utf-8', 'latin1', 'utf-16', 'utf-16-le', 'utf-16-be']
+                # Leer contenido
+                with open(xml_path, "rb") as f:
+                    binary_content = f.read()
+                
+                encodings = ['utf-8', 'utf-8-sig', 'latin1', 'cp1252', 'utf-16-le', 'utf-16-be', 'ascii']
                 content = None
                 used_encoding = None
                 
@@ -84,23 +84,24 @@ def process_project(path, output_dir, old_text, new_text):
                         content = binary_content.decode(encoding)
                         used_encoding = encoding
                         log(f"📄 Archivo {file} decodificado con {encoding}")
-                        if old_text in content:
-                            log(f"🔎 ¡Coincidencia encontrada con codificación {encoding}!")
                         break
                     except UnicodeDecodeError:
                         continue
                 
                 if content is None:
-                    log(f"⚠️ No se pudo leer el archivo {file} con ninguna codificación")
+                    log(f"⚠️ No se pudo decodificar {file} - saltando")
                     continue
                 
-                # Intentar varias formas del texto a buscar
+                # Variaciones del texto a buscar
                 variations = [
                     old_text,
-                    old_text.replace("\"", "'"),  # Comillas diferentes
-                    old_text.replace(" ", ""),    # Sin espacios
-                    old_text.replace("?>", "?>\r"), # Con retorno
-                    old_text.replace("?>", "?>\n"), # Con nueva línea
+                    old_text.replace("\\", "\\\\"),
+                    old_text.replace("\\", "/"),
+                    old_text.replace("\\\\", "\\"),
+                    old_text.replace("\"", "'"),
+                    old_text.replace(" ", ""),
+                    old_text.replace("?>", "?>\r"),
+                    old_text.replace("?>", "?>\n"),
                 ]
                 
                 replacement_made = False
@@ -108,15 +109,14 @@ def process_project(path, output_dir, old_text, new_text):
                     if variant in content:
                         before_count = content.count(variant)
                         content = content.replace(variant, new_text)
-                        after_count = content.count(new_text) - (content.count(new_text) - before_count)
                         replacements_count += before_count
-                        log(f"🔄 Se encontraron {before_count} coincidencias de variante '{variant}' en {file}")
+                        log(f"🔄 ¡ÉXITO! Se reemplazaron {before_count} coincidencias de '{variant}' en {file}")
                         replacement_made = True
                 
                 if replacement_made:
-                    # Guardar el archivo modificado
                     with open(xml_path, "w", encoding=used_encoding) as f:
                         f.write(content)
+                    log(f"✅ Guardado archivo modificado: {file}")
                 
             except Exception as e:
                 log(f"❌ Error al procesar {file}: {str(e)}")
@@ -126,25 +126,62 @@ def process_project(path, output_dir, old_text, new_text):
     else:
         log(f"✅ Se realizaron {replacements_count} reemplazos en total")
 
-    # Reempaquetar
-    log(f"📦 Reempaquetando proyecto modificado...")
-    mod_zip_path = os.path.join(output_dir, f"{name_wo_ext}_mod.zip")
-    with zipfile.ZipFile(mod_zip_path, 'w', zipfile.ZIP_DEFLATED) as new_zip:
-        for root, _, files in os.walk(extract_dir):
-            for file in files:
-                full_path = os.path.join(root, file)
-                arcname = os.path.relpath(full_path, extract_dir)
-                new_zip.write(full_path, arcname)
-
-    # Renombrar como .prproj
-    final_project = os.path.join(output_dir, f"{name_wo_ext}_mod.prproj")
-    os.rename(mod_zip_path, final_project)
-
-    # Limpiar temporales
-    os.remove(zip_path)
-    shutil.rmtree(extract_dir)
-
-    log(f"✅ Archivo procesado: {final_project}")
+    # REEMPAQUETAR CON GZIP (MÉTODO QUE FUNCIONA)
+    log(f"📦 Reempaquetando proyecto con GZIP...")
+    
+    mod_gzip_path = os.path.join(output_dir, f"{name_wo_ext}_mod.tar.gz")
+    
+    try:
+        import tarfile
+        
+        # Crear archivo tar.gz
+        with tarfile.open(mod_gzip_path, "w:gz") as tar:
+            for root, dirs, files in os.walk(extract_dir):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    arcname = os.path.relpath(full_path, extract_dir)
+                    tar.add(full_path, arcname=arcname)
+        
+        log(f"✅ Archivo GZIP creado exitosamente: {mod_gzip_path}")
+        
+        # Renombrar como .prproj
+        final_project = os.path.join(output_dir, f"{name_wo_ext}_mod.prproj")
+        
+        if os.path.exists(final_project):
+            try:
+                os.remove(final_project)
+                log(f"🗑️ Eliminado archivo existente: {final_project}")
+            except Exception as e:
+                log(f"⚠️ No se pudo eliminar el archivo existente: {e}")
+        
+        try:
+            os.rename(mod_gzip_path, final_project)
+            log(f"✅ Archivo renombrado exitosamente a: {final_project}")
+        except Exception as e:
+            log(f"❌ Error al renombrar: {e}")
+            try:
+                shutil.copy2(mod_gzip_path, final_project)
+                os.remove(mod_gzip_path)
+                log("✅ Archivo copiado y original eliminado")
+            except Exception as copy_error:
+                log(f"❌ Error al copiar: {copy_error}")
+                messagebox.showerror("Error", f"No se pudo renombrar/copiar el archivo: {e}")
+                return False
+        
+        # Limpiar temporales
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        
+        log(f"✅ Archivo procesado exitosamente: {final_project}")
+        messagebox.showinfo("Éxito", f"Proyecto procesado y guardado como:\n{final_project}")
+        return True
+        
+    except Exception as e:
+        log(f"❌ Error con compresión GZIP: {e}")
+        messagebox.showerror("Error", f"No se pudo reempaquetar el proyecto: {e}")
+        return False
 
 def extract_archive(zip_path, extract_dir):
     """Intenta extraer el archivo usando diferentes métodos."""
@@ -194,7 +231,7 @@ def extract_archive(zip_path, extract_dir):
                 result = subprocess.run([cmd, 'x', zip_path, f'-o{extract_dir}', '-y'], 
                                       capture_output=True, text=True)
                 if result.returncode == 0:
-                    log(f"📦 Extracción realizada con 7z ({cmd})")
+                    log(f"📦 Extracción realizada with 7z ({cmd})")
                     return True
                 else:
                     log(f"⚠️ 7z encontrado en {cmd} pero falló: {result.stderr}")
@@ -232,6 +269,86 @@ def log_file_info(zip_path):
         log(f"📝 Información del archivo guardada en {zip_path}_info.txt")
     except Exception as e:
         log(f"❌ Error al diagnosticar archivo: {e}")
+
+def analyze_zip_structure(zip_path, label):
+    """Analiza la estructura detallada de un archivo ZIP para comparación."""
+    log(f"🔍 === ANÁLISIS DE {label} ===")
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            info_list = zip_ref.infolist()
+            
+            log(f"📊 Número total de archivos: {len(info_list)}")
+            log(f"📊 Tamaño del archivo: {os.path.getsize(zip_path)} bytes")
+            
+            # Analizar cada archivo dentro del ZIP
+            for i, info in enumerate(info_list):
+                if i < 5:  # Solo mostrar los primeros 5 para no saturar el log
+                    log(f"   📄 {info.filename}")
+                    log(f"      Método compresión: {info.compress_type}")
+                    log(f"      Tamaño original: {info.file_size}")
+                    log(f"      Tamaño comprimido: {info.compress_size}")
+                    log(f"      CRC32: {hex(info.CRC)}")
+                    log(f"      Fecha modificación: {info.date_time}")
+            
+            if len(info_list) > 5:
+                log(f"   ... y {len(info_list) - 5} archivos más")
+                
+            # Analizar métodos de compresión únicos
+            compression_methods = set(info.compress_type for info in info_list)
+            log(f"📊 Métodos de compresión encontrados: {compression_methods}")
+            
+            # Mapear números a nombres
+            compression_names = {
+                0: "Stored (sin compresión)",
+                8: "Deflated (compresión estándar)",
+                12: "BZIP2",
+                14: "LZMA"
+            }
+            
+            for method in compression_methods:
+                name = compression_names.get(method, f"Desconocido ({method})")
+                count = sum(1 for info in info_list if info.compress_type == method)
+                log(f"   {name}: {count} archivos")
+                
+    except Exception as e:
+        log(f"❌ Error analizando {label}: {e}")
+
+def create_reference_zip_manually(extract_dir, reference_path):
+    """Crea un ZIP de referencia usando diferentes métodos para comparar."""
+    log("🔬 Creando ZIP de referencia con diferentes métodos...")
+    
+    methods_to_test = [
+        (zipfile.ZIP_STORED, "SIN_COMPRESION"),
+        (zipfile.ZIP_DEFLATED, "DEFLATED_DEFAULT"),
+        # También podemos probar diferentes niveles de compresión si es necesario
+    ]
+    
+    for compress_type, method_name in methods_to_test:
+        test_zip_path = reference_path.replace(".zip", f"_TEST_{method_name}.zip")
+        
+        try:
+            with zipfile.ZipFile(test_zip_path, 'w', compress_type) as test_zip:
+                for root, _, files in os.walk(extract_dir):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        arcname = os.path.relpath(full_path, extract_dir)
+                        test_zip.write(full_path, arcname)
+            
+            log(f"✅ Creado ZIP de prueba: {method_name}")
+            analyze_zip_structure(test_zip_path, f"PRUEBA {method_name}")
+            
+        except Exception as e:
+            log(f"❌ Error creando {method_name}: {e}")
+
+def test_powershell_compression_levels():
+    """Prueba diferentes niveles de compresión de PowerShell."""
+    levels = ["Fastest", "Optimal", "NoCompression"]
+    
+    for level in levels:
+        log(f"🧪 Probando nivel de compresión PowerShell: {level}")
+        # Este código se integraría en el proceso principal
+        return level  # Por ahora solo retorna para mostrar la estructura
 
 def main():
     global log_text
