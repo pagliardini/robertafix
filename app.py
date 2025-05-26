@@ -155,32 +155,57 @@ def extract_archive(zip_path, extract_dir):
         log("📦 Extracción realizada con zipfile")
         return True
     except zipfile.BadZipFile:
-        # Segundo intento: usando unzip (si está disponible)
-        log("⚠️ Error con zipfile, intentando con unzip...")
+        # Detectar sistema operativo
+        is_windows = os.name == 'nt'
+        
+        if not is_windows:
+            # Segundo intento en Linux/Unix: usando unzip
+            log("⚠️ Error con zipfile, intentando con unzip...")
+            try:
+                import subprocess
+                result = subprocess.run(['unzip', zip_path, '-d', extract_dir], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0:
+                    log("📦 Extracción realizada con unzip")
+                    return True
+            except Exception as e:
+                log(f"❌ Error con unzip: {e}")
+        
+        # Tercer intento: usando 7z (con rutas específicas para Windows)
+        log("⚠️ Error con método anterior, intentando con 7z...")
         try:
             import subprocess
-            result = subprocess.run(['unzip', zip_path, '-d', extract_dir], 
-                                   capture_output=True, text=True)
-            if result.returncode == 0:
-                log("📦 Extracción realizada con unzip")
-                return True
-        except Exception as e:
-            log(f"❌ Error con unzip: {e}")
             
-        # Tercer intento: usando 7z (si está disponible)
-        log("⚠️ Error con unzip, intentando con 7z...")
-        try:
-            result = subprocess.run(['7z', 'x', zip_path, f'-o{extract_dir}'], 
-                                   capture_output=True, text=True)
-            if result.returncode == 0:
-                log("📦 Extracción realizada con 7z")
-                return True
+            # Posibles rutas de 7zip en Windows
+            seven_zip_paths = [
+                '7z',  # Por si está en el PATH
+                r'C:\Program Files\7-Zip\7z.exe',
+                r'C:\Program Files (x86)\7-Zip\7z.exe',
+            ]
+            
+            # Encontrar la primera ruta que exista
+            cmd = None
+            for path in seven_zip_paths:
+                if not is_windows or os.path.exists(path) or path == '7z':
+                    cmd = path
+                    break
+            
+            if cmd:
+                result = subprocess.run([cmd, 'x', zip_path, f'-o{extract_dir}', '-y'], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0:
+                    log(f"📦 Extracción realizada con 7z ({cmd})")
+                    return True
+                else:
+                    log(f"⚠️ 7z encontrado en {cmd} pero falló: {result.stderr}")
+            else:
+                log("⚠️ No se encontró instalación de 7-Zip")
+                
         except Exception as e:
             log(f"❌ Error con 7z: {e}")
-            
-        # Si llegamos aquí, todos los métodos han fallado
-        log("❌ Todos los métodos de extracción han fallado")
-        return False
+        
+        # Último intento: usar patool si está disponible
+        return extract_archive_with_patool(zip_path, extract_dir)
 
 def extract_archive_with_patool(zip_path, extract_dir):
     """Extrae el archivo usando patool, que es más tolerante y soporta múltiples formatos."""
