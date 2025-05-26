@@ -357,9 +357,9 @@ def main():
     root.title("Reemplazador de Texto en Proyectos Premiere")
     root.geometry("700x500")  # Mayor tamaño para acomodar el área de log
     
-    # Variables
-    old_text_var = StringVar(value=r"\\192.168.1.50\\")
-    new_text_var = StringVar(value=r"\\192.168.1.100\\")
+    # Variables - VALORES MODIFICADOS
+    old_text_var = StringVar(value="172.16.70.70")
+    new_text_var = StringVar(value="172.16.7.250")
     folder_path = StringVar()
     
     # Layout
